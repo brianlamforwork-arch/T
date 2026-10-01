@@ -4,6 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Travel claim">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
 <title>Travel claim (AC-103e)</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -141,6 +145,12 @@ details.more>summary::-webkit-details-marker{display:none}
 .linkbtn{display:block;width:100%;text-align:left;border:0;background:transparent;padding:14px 0;border-top:1px solid var(--line);font-size:16px;color:var(--accent)}
 .linkbtn.danger{color:var(--danger)}
 .hidden-file{display:none}
+.a2hs{background:var(--warn-soft);color:var(--ink);border-radius:14px;padding:12px 14px 6px;margin:0 0 14px;font-size:14.5px}
+.a2hs[hidden]{display:none}
+.a2hs p{margin:4px 0 0}
+.a2hs .share{display:inline-block;border:1px solid var(--line-strong);border-radius:6px;padding:0 5px;font-size:12px}
+.a2hs .btn{min-height:40px;padding:0;margin-top:2px}
+.backup-note{font-size:13.5px;color:var(--muted);margin:2px 0 4px}
 .sub{margin:18px 0 10px!important;font-size:15px!important;color:var(--ink)!important;font-weight:700!important}
 .codes{grid-template-columns:1.3fr auto 1fr}
 .dash{padding-bottom:26px;color:var(--muted)}
@@ -179,6 +189,11 @@ details.more>summary::-webkit-details-marker{display:none}
     <button type="button" id="nextM" aria-label="Next month">›</button>
   </div>
   <div class="sum"><b id="sumTotal">HK$ 0.00</b> <span id="sumCount"></span></div>
+  <div class="a2hs" id="a2hs" hidden>
+    <b>Keep your trips safe</b>
+    <p>Safari may delete saved trips if this page isn’t opened for a while. Tap <span class="share" aria-label="Share">⬆︎</span> Share, then <b>Add to Home Screen</b>, and always open the app from that icon.</p>
+    <button type="button" class="btn quiet" id="a2hsClose">Got it</button>
+  </div>
   <div class="sync" id="sync"><i></i><span id="syncText">Saved on this device</span></div>
 
   <main id="list"></main>
@@ -245,6 +260,11 @@ details.more>summary::-webkit-details-marker{display:none}
     <h3 class="sub">Approved by</h3>
     <label class="fld"><span>Approver’s name</span><input class="cjk" id="pApprover"></label>
     <label class="fld"><span>Approver’s post</span><input class="cjk" id="pApproverPost"></label>
+    <h3 class="sub">Backup</h3>
+    <p class="backup-note" id="backupNote">Save a backup file of all your details and trips to Files. If your data is ever lost, restore it here.</p>
+    <button class="linkbtn" type="button" id="backupBtn">Save a backup…</button>
+    <button class="linkbtn" type="button" id="restoreBtn">Restore from a backup…</button>
+    <input type="file" id="restoreFile" class="hidden-file" accept=".json,application/json">
     <button class="linkbtn" type="button" id="importBtn">Load a filled form (.xlsx)…</button>
     <button class="linkbtn danger" type="button" id="clearBtn">Clear this month’s trips</button>
     <input type="file" id="importFile" class="hidden-file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
@@ -974,6 +994,47 @@ async function runExport(btn, kind){
 }
 $("#dlXlsx").onclick = e=>runExport(e.currentTarget, "xlsx");
 $("#dlPdf").onclick = e=>runExport(e.currentTarget, "pdf");
+
+/* ---------- keep data: persistent storage, home-screen hint, backup ---------- */
+const isStandalone = () => window.navigator.standalone === true || (window.matchMedia && matchMedia("(display-mode: standalone)").matches);
+const isIOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform==="MacIntel" && navigator.maxTouchPoints>1);
+try{ if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(()=>{}); }catch(e){}
+if (isIOS && !isStandalone() && !(window.claude) && !LS.get("ac103e2:a2hsDone", false)) $("#a2hs").hidden = false;
+$("#a2hsClose").onclick = ()=>{ $("#a2hs").hidden = true; LS.set("ac103e2:a2hsDone", true); };
+
+function allLocalData(){
+  const out = {};
+  try{ for (let i=0;i<localStorage.length;i++){ const k = localStorage.key(i); if (k && k.startsWith("ac103e2:") && !k.includes("a2hs") && !k.includes("lastBackup")) out[k] = JSON.parse(localStorage.getItem(k)); } }catch(e){}
+  return out;
+}
+function backupNote(){
+  const t = LS.get("ac103e2:lastBackup", 0);
+  if (t){ const d = new Date(t); $("#backupNote").textContent = "Last backup: "+d.getDate()+" "+MONTHS[d.getMonth()]+" "+d.getFullYear()+". Save one after each month’s claim."; }
+}
+$("#backupBtn").onclick = async ()=>{
+  saveMonth(); saveProfile();
+  const data = {app:"AC-103e travel claim", version:1, savedAt:new Date().toISOString(), data:allLocalData()};
+  const d = new Date(), stamp = d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");
+  await saveFile("travel-claim-backup-"+stamp+".json", new Blob([JSON.stringify(data)], {type:"application/json"}));
+  LS.set("ac103e2:lastBackup", Date.now()); backupNote();
+};
+$("#restoreBtn").onclick = ()=>$("#restoreFile").click();
+$("#restoreFile").addEventListener("change", async e=>{
+  const f = e.target.files[0]; e.target.value = ""; if (!f) return;
+  try{
+    const j = JSON.parse(await f.text());
+    if (!j || !j.data || j.app!=="AC-103e travel claim") throw new Error("This isn’t a travel claim backup file.");
+    const months = Object.keys(j.data).filter(k=>k.startsWith("ac103e2:m:")).length;
+    if (!confirm("Restore your details and "+months+" month(s) of trips from this backup? Data for the same months on this device will be replaced.")) return;
+    for (const [k,v] of Object.entries(j.data)) if (k.startsWith("ac103e2:")) LS.set(k, v);
+    profile = normProfile(LS.get(LK.profile, null)); profile.updatedAt = Date.now();
+    month = LS.get(LK.last, null) || month; md = normMonth(month, LS.get(LK.m(month), null)); md.updatedAt = Date.now();
+    saveProfile(); saveMonth();
+    for (const [id,k] of ME_FIELDS) $(id).value = profile[k] || "";
+    fillDatalists(); refreshAll(); toast("Backup restored");
+  }catch(err){ toast("Couldn’t restore: "+(err.message||err)); }
+});
+backupNote();
 
 /* ---------- start ---------- */
 fillDatalists();
